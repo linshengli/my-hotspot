@@ -1,4 +1,4 @@
-.idea/
-.vscode/
-cmake-build-debug/
-hotspot.si5project/
+*.idea/
+*.vscode/
+*cmake-build-debug/
+*hotspot.si5project/
