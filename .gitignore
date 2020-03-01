@@ -1,4 +1,4 @@
 *.idea/
 *.vscode/
 *cmake-build-debug/
-*hotspot\.si4project/
+/hotspot.si4project/
