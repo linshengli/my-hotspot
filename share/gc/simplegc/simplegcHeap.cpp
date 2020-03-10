@@ -145,6 +145,9 @@ HeapWord* SimpleGCHeap::allocate_work(size_t size) {
     log_info(gc)("Failed to allocate %d %s bytes", (int)byte_size_in_proper_unit(size),proper_unit_for_byte_size(size));
     return NULL;
   }
+  log_info(gc)("Success allocate %d %s bytes", (int)byte_size_in_proper_unit(size),proper_unit_for_byte_size(size));
+
+  // log_info(gc)("Object size: %d ", (int)size);
   // while (res == NULL) {
   //   // Allocation failed, attempt expansion, and retry:
   //   MutexLocker ml(Heap_lock);
