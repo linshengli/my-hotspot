@@ -33,18 +33,20 @@
 #include "memory/universe.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/globals.hpp"
+#include "gc/shared/gcTraceTime.inline.hpp"
 
-jint SimpleGCHeap::initialize() {
+jint SimpleGCHeap::initialize()
+{
   size_t align = HeapAlignment;
   size_t init_byte_size = align_up(InitialHeapSize, align);
-  size_t max_byte_size  = align_up(MaxHeapSize, align);
+  size_t max_byte_size = align_up(MaxHeapSize, align);
 
   // Initialize backing storage
   ReservedHeapSpace heap_rs = Universe::reserve_heap(max_byte_size, align);
   _virtual_space.initialize(heap_rs, init_byte_size);
 
-  MemRegion committed_region((HeapWord*)_virtual_space.low(),          (HeapWord*)_virtual_space.high());
-  MemRegion reserved_region((HeapWord*)_virtual_space.low_boundary(), (HeapWord*)_virtual_space.high_boundary());
+  MemRegion committed_region((HeapWord *)_virtual_space.low(), (HeapWord *)_virtual_space.high());
+  MemRegion reserved_region((HeapWord *)_virtual_space.low_boundary(), (HeapWord *)_virtual_space.high_boundary());
 
   initialize_reserved_region(heap_rs);
 
@@ -57,13 +59,12 @@ jint SimpleGCHeap::initialize() {
   // _max_tlab_size = MIN2(CollectedHeap::max_tlab_size(), align_object_size(SimpleGCMaxTLABSize / HeapWordSize));
   _max_tlab_size = MIN2(CollectedHeap::max_tlab_size(), align_object_size(4 * M / HeapWordSize));
 
-
   size_t SimpleUpdateCounterStep = 1 * M;
   _step_counter_update = MIN2<size_t>(max_byte_size / 16, SimpleUpdateCounterStep);
   size_t simpleGCPrintHeapSteps = 20;
   _step_heap_print = max_byte_size / simpleGCPrintHeapSteps;
   size_t SimpleGCTLABDecayTime = 1000;
-  _decay_time_ns = (int64_t) (SimpleGCTLABDecayTime) * NANOSECS_PER_MILLISEC;
+  _decay_time_ns = (int64_t)(SimpleGCTLABDecayTime)*NANOSECS_PER_MILLISEC;
 
   // Enable monitoring
   _monitoring_support = new SimpleGCMonitoringSupport(this);
@@ -101,52 +102,60 @@ jint SimpleGCHeap::initialize() {
   return JNI_OK;
 }
 
-void SimpleGCHeap::post_initialize() {
+void SimpleGCHeap::post_initialize()
+{
   CollectedHeap::post_initialize();
 }
 
-void SimpleGCHeap::initialize_serviceability() {
+void SimpleGCHeap::initialize_serviceability()
+{
   _pool = new SimpleGCMemoryPool(this);
   _memory_manager.add_pool(_pool);
 }
 
-GrowableArray<GCMemoryManager*> SimpleGCHeap::memory_managers() {
-  GrowableArray<GCMemoryManager*> memory_managers(1);
+GrowableArray<GCMemoryManager *> SimpleGCHeap::memory_managers()
+{
+  GrowableArray<GCMemoryManager *> memory_managers(1);
   memory_managers.append(&_memory_manager);
   return memory_managers;
 }
 
-GrowableArray<MemoryPool*> SimpleGCHeap::memory_pools() {
-  GrowableArray<MemoryPool*> memory_pools(1);
+GrowableArray<MemoryPool *> SimpleGCHeap::memory_pools()
+{
+  GrowableArray<MemoryPool *> memory_pools(1);
   memory_pools.append(_pool);
   return memory_pools;
 }
 
-size_t SimpleGCHeap::unsafe_max_tlab_alloc(Thread* thr) const {
+size_t SimpleGCHeap::unsafe_max_tlab_alloc(Thread *thr) const
+{
   // Return max allocatable TLAB size, and let allocation path figure out
   // the actual allocation size. Note: result should be in bytes.
   return _max_tlab_size * HeapWordSize;
 }
 
-SimpleGCHeap* SimpleGCHeap::heap() {
-  CollectedHeap* heap = Universe::heap();
+SimpleGCHeap *SimpleGCHeap::heap()
+{
+  CollectedHeap *heap = Universe::heap();
   assert(heap != NULL, "Uninitialized access to SimpleGCHeap::heap()");
   assert(heap->kind() == CollectedHeap::SimpleGC, "Not an SimpleGC heap");
-  return (SimpleGCHeap*)heap;
+  return (SimpleGCHeap *)heap;
 }
 
 //TODO
-HeapWord* SimpleGCHeap::allocate_work(size_t size) {
+HeapWord *SimpleGCHeap::allocate_work(size_t size)
+{
   assert(is_object_aligned(size), "Allocation size should be aligned: " SIZE_FORMAT, size);
 
-  HeapWord* res = _space->par_allocate(size);
+  HeapWord *res = _space->par_allocate(size);
 
   size_t space_left = max_capacity() - capacity();
-  if((res == NULL) && (size > space_left)){
-    log_info(gc)("Failed to allocate %d %s bytes", (int)byte_size_in_proper_unit(size),proper_unit_for_byte_size(size));
+  if ((res == NULL) && (size > space_left))
+  {
+    log_info(gc)("Failed to allocate %d %s bytes", (int)byte_size_in_proper_unit(size), proper_unit_for_byte_size(size));
     return NULL;
   }
-  log_info(gc)("Success allocate %d %s bytes", (int)byte_size_in_proper_unit(size),proper_unit_for_byte_size(size));
+  log_info(gc)("Success allocate %d %s bytes", (int)byte_size_in_proper_unit(size), proper_unit_for_byte_size(size));
 
   // log_info(gc)("Object size: %d ", (int)size);
   // while (res == NULL) {
@@ -179,7 +188,8 @@ HeapWord* SimpleGCHeap::allocate_work(size_t size) {
   // Allocation successful, update counters
   {
     size_t last = _last_counter_update;
-    if ((used - last >= _step_counter_update) && Atomic::cmpxchg(&_last_counter_update, last, used) == last) {
+    if ((used - last >= _step_counter_update) && Atomic::cmpxchg(&_last_counter_update, last, used) == last)
+    {
       _monitoring_support->update_counters();
     }
   }
@@ -187,7 +197,8 @@ HeapWord* SimpleGCHeap::allocate_work(size_t size) {
   // ...and print the occupancy line, if needed
   {
     size_t last = _last_heap_print;
-    if ((used - last >= _step_heap_print) && Atomic::cmpxchg(&_last_heap_print, last, used) == last) {
+    if ((used - last >= _step_heap_print) && Atomic::cmpxchg(&_last_heap_print, last, used) == last)
+    {
       print_heap_info(used);
       print_metaspace_info();
     }
@@ -197,10 +208,11 @@ HeapWord* SimpleGCHeap::allocate_work(size_t size) {
   return res;
 }
 
-HeapWord* SimpleGCHeap::allocate_new_tlab(size_t min_size,
-                                         size_t requested_size,
-                                         size_t* actual_size) {
-  Thread* thread = Thread::current();
+HeapWord *SimpleGCHeap::allocate_new_tlab(size_t min_size,
+                                          size_t requested_size,
+                                          size_t *actual_size)
+{
+  Thread *thread = Thread::current();
 
   // Defaults in case elastic paths are not taken
   bool fits = true;
@@ -236,7 +248,7 @@ HeapWord* SimpleGCHeap::allocate_new_tlab(size_t min_size,
 
   // Always honor boundaries
   // size = clamp(size, min_size, _max_tlab_size);
-  size = MAX2(min_size,MIN2(_max_tlab_size, size));
+  size = MAX2(min_size, MIN2(_max_tlab_size, size));
 
   // Always honor alignment
   size = align_up(size, MinObjAlignment);
@@ -245,16 +257,17 @@ HeapWord* SimpleGCHeap::allocate_new_tlab(size_t min_size,
   assert(is_object_aligned(size),
          "Size honors object alignment: " SIZE_FORMAT, size);
   assert(min_size <= size,
-         "Size honors min size: "  SIZE_FORMAT " <= " SIZE_FORMAT, min_size, size);
+         "Size honors min size: " SIZE_FORMAT " <= " SIZE_FORMAT, min_size, size);
   assert(size <= _max_tlab_size,
-         "Size honors max size: "  SIZE_FORMAT " <= " SIZE_FORMAT, size, _max_tlab_size);
+         "Size honors max size: " SIZE_FORMAT " <= " SIZE_FORMAT, size, _max_tlab_size);
   assert(size <= CollectedHeap::max_tlab_size(),
-         "Size honors global max size: "  SIZE_FORMAT " <= " SIZE_FORMAT, size, CollectedHeap::max_tlab_size());
+         "Size honors global max size: " SIZE_FORMAT " <= " SIZE_FORMAT, size, CollectedHeap::max_tlab_size());
 
-  if (log_is_enabled(Trace, gc)) {
+  if (log_is_enabled(Trace, gc))
+  {
     ResourceMark rm;
     log_trace(gc)("TLAB size for \"%s\" (Requested: " SIZE_FORMAT "K, Min: " SIZE_FORMAT
-                          "K, Max: " SIZE_FORMAT "K, Ergo: " SIZE_FORMAT "K) -> " SIZE_FORMAT "K",
+                  "K, Max: " SIZE_FORMAT "K, Ergo: " SIZE_FORMAT "K) -> " SIZE_FORMAT "K",
                   thread->name(),
                   requested_size * HeapWordSize / K,
                   min_size * HeapWordSize / K,
@@ -264,9 +277,10 @@ HeapWord* SimpleGCHeap::allocate_new_tlab(size_t min_size,
   }
 
   // All prepared, let's do it!
-  HeapWord* res = allocate_work(size);
+  HeapWord *res = allocate_work(size);
 
-  if (res != NULL) {
+  if (res != NULL)
+  {
     // Allocation successful
     *actual_size = size;
     // if (SimpleGCElasticTLABDecay) {
@@ -276,7 +290,9 @@ HeapWord* SimpleGCHeap::allocate_new_tlab(size_t min_size,
     //   // If we requested expansion, this is our new ergonomic TLAB size
     //   SimpleGCThreadLocalData::set_ergo_tlab_size(thread, size);
     // }
-  } else {
+  }
+  else
+  {
     // Allocation failed, reset ergonomics to try and fit smaller TLABs
     // if (SimpleGCElasticTLAB) {
     //   SimpleGCThreadLocalData::set_ergo_tlab_size(thread, 0);
@@ -286,42 +302,85 @@ HeapWord* SimpleGCHeap::allocate_new_tlab(size_t min_size,
   return res;
 }
 
-HeapWord* SimpleGCHeap::mem_allocate(size_t size, bool *gc_overhead_limit_was_exceeded) {
+HeapWord *SimpleGCHeap::mem_allocate(size_t size, bool *gc_overhead_limit_was_exceeded)
+{
   *gc_overhead_limit_was_exceeded = false;
   return allocate_work(size);
 }
 
-void SimpleGCHeap::collect(GCCause::Cause cause) {
-  switch (cause) {
-    case GCCause::_metadata_GC_threshold:
-    case GCCause::_metadata_GC_clear_soft_refs:
-      // Receiving these causes means the VM itself entered the safepoint for metadata collection.
-      // While SimpleGC does not do GC, it has to perform sizing adjustments, otherwise we would
-      // re-enter the safepoint again very soon.
+void SimpleGCHeap::entry_collect(GCCause::Cause cause)
+{
+  log_info(gc)("SimpleGC entry collect.");
+  //
 
-      assert(SafepointSynchronize::is_at_safepoint(), "Expected at safepoint");
-      log_info(gc)("GC request for \"%s\" is handled", GCCause::to_string(cause));
-      MetaspaceGC::compute_new_size();
-      print_metaspace_info();
-      break;
-    default:{
-        log_info(gc)("GC request for \"%s\" is ignored", GCCause::to_string(cause));
-        //TODO collect data.
-        
-      }
+  {
+    GCTraceTime(Info, gc) time("Step 0: Prologue", NULL);
+  }
+
+  {
+    GCTraceTime(Info, gc) time("Step 1: Mark", NULL);
+    //mark all live objects with closure.
+  }
+
+  {
+    GCTraceTime(Info, gc) time("Step 2: Calculate new locations", NULL);
+  }
+
+  {
+    GCTraceTime(Info, gc) time("Step 3: Adjust pointers", NULL);
+  }
+
+  {
+    GCTraceTime(Info, gc) time("Step 4: Actual move objects", NULL);
+  }
+
+  {
+    GCTraceTime(Info, gc) time("Step 5: Epilogue", NULL);
+  }
+
+  //
+}
+
+void SimpleGCHeap::collect(GCCause::Cause cause)
+{
+  switch (cause)
+  {
+  case GCCause::_metadata_GC_threshold:
+  case GCCause::_metadata_GC_clear_soft_refs:
+    // Receiving these causes means the VM itself entered the safepoint for metadata collection.
+    // While SimpleGC does not do GC, it has to perform sizing adjustments, otherwise we would
+    // re-enter the safepoint again very soon.
+
+    assert(SafepointSynchronize::is_at_safepoint(), "Expected at safepoint");
+    log_info(gc)("GC request for \"%s\" is handled", GCCause::to_string(cause));
+    MetaspaceGC::compute_new_size();
+    print_metaspace_info();
+    break;
+  default:
+  {
+    log_info(gc)("GC request for \"%s\" is ignored", GCCause::to_string(cause));
+    //TODO collect data.
+    if (SafepointSynchronize::is_at_safepoint())
+    {
+      entry_collect(cause);
+    }
+  }
   }
   _monitoring_support->update_counters();
 }
 
-void SimpleGCHeap::do_full_collection(bool clear_all_soft_refs) {
+void SimpleGCHeap::do_full_collection(bool clear_all_soft_refs)
+{
   collect(gc_cause());
 }
 
-void SimpleGCHeap::object_iterate(ObjectClosure *cl) {
+void SimpleGCHeap::object_iterate(ObjectClosure *cl)
+{
   _space->object_iterate(cl);
 }
 
-void SimpleGCHeap::print_on(outputStream *st) const {
+void SimpleGCHeap::print_on(outputStream *st) const
+{
   st->print_cr("SimpleGC Heap");
 
   // Cast away constness:
@@ -333,46 +392,54 @@ void SimpleGCHeap::print_on(outputStream *st) const {
   MetaspaceUtils::print_on(st);
 }
 
-bool SimpleGCHeap::print_location(outputStream* st, void* addr) const {
+bool SimpleGCHeap::print_location(outputStream *st, void *addr) const
+{
   return BlockLocationPrinter<SimpleGCHeap>::print_location(st, addr);
 }
 
-void SimpleGCHeap::print_tracing_info() const {
+void SimpleGCHeap::print_tracing_info() const
+{
   print_heap_info(used());
   print_metaspace_info();
 }
 
-void SimpleGCHeap::print_heap_info(size_t used) const {
-  size_t reserved  = max_capacity();
+void SimpleGCHeap::print_heap_info(size_t used) const
+{
+  size_t reserved = max_capacity();
   size_t committed = capacity();
 
-  if (reserved != 0) {
-    log_info(gc)("Heap: " SIZE_FORMAT "%s reserved, " SIZE_FORMAT "%s (%.2f%%) committed, "
-                 SIZE_FORMAT "%s (%.2f%%) used",
-            byte_size_in_proper_unit(reserved),  proper_unit_for_byte_size(reserved),
-            byte_size_in_proper_unit(committed), proper_unit_for_byte_size(committed),
-            committed * 100.0 / reserved,
-            byte_size_in_proper_unit(used),      proper_unit_for_byte_size(used),
-            used * 100.0 / reserved);
-  } else {
+  if (reserved != 0)
+  {
+    log_info(gc)("Heap: " SIZE_FORMAT "%s reserved, " SIZE_FORMAT "%s (%.2f%%) committed, " SIZE_FORMAT "%s (%.2f%%) used",
+                 byte_size_in_proper_unit(reserved), proper_unit_for_byte_size(reserved),
+                 byte_size_in_proper_unit(committed), proper_unit_for_byte_size(committed),
+                 committed * 100.0 / reserved,
+                 byte_size_in_proper_unit(used), proper_unit_for_byte_size(used),
+                 used * 100.0 / reserved);
+  }
+  else
+  {
     log_info(gc)("Heap: no reliable data");
   }
 }
 
-void SimpleGCHeap::print_metaspace_info() const {
-  size_t reserved  = MetaspaceUtils::reserved_bytes();
+void SimpleGCHeap::print_metaspace_info() const
+{
+  size_t reserved = MetaspaceUtils::reserved_bytes();
   size_t committed = MetaspaceUtils::committed_bytes();
-  size_t used      = MetaspaceUtils::used_bytes();
+  size_t used = MetaspaceUtils::used_bytes();
 
-  if (reserved != 0) {
-    log_info(gc, metaspace)("Metaspace: " SIZE_FORMAT "%s reserved, " SIZE_FORMAT "%s (%.2f%%) committed, "
-                            SIZE_FORMAT "%s (%.2f%%) used",
-            byte_size_in_proper_unit(reserved),  proper_unit_for_byte_size(reserved),
-            byte_size_in_proper_unit(committed), proper_unit_for_byte_size(committed),
-            committed * 100.0 / reserved,
-            byte_size_in_proper_unit(used),      proper_unit_for_byte_size(used),
-            used * 100.0 / reserved);
-  } else {
+  if (reserved != 0)
+  {
+    log_info(gc, metaspace)("Metaspace: " SIZE_FORMAT "%s reserved, " SIZE_FORMAT "%s (%.2f%%) committed, " SIZE_FORMAT "%s (%.2f%%) used",
+                            byte_size_in_proper_unit(reserved), proper_unit_for_byte_size(reserved),
+                            byte_size_in_proper_unit(committed), proper_unit_for_byte_size(committed),
+                            committed * 100.0 / reserved,
+                            byte_size_in_proper_unit(used), proper_unit_for_byte_size(used),
+                            used * 100.0 / reserved);
+  }
+  else
+  {
     log_info(gc, metaspace)("Metaspace: no reliable data");
   }
 }

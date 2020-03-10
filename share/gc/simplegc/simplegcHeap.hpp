@@ -104,6 +104,13 @@ public:
 
   virtual void collect(GCCause::Cause cause);
   virtual void do_full_collection(bool clear_all_soft_refs);
+  
+  //Added
+  /*
+   * collect entry.
+   * used when the thread is in safepoint/saferegin.
+   */
+  void entry_collect(GCCause::Cause cause);
 
   // Heap walking support
   virtual void object_iterate(ObjectClosure* cl);
