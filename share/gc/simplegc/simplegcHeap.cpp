@@ -57,6 +57,7 @@ jint SimpleGCHeap::initialize() {
   // _max_tlab_size = MIN2(CollectedHeap::max_tlab_size(), align_object_size(SimpleGCMaxTLABSize / HeapWordSize));
   _max_tlab_size = MIN2(CollectedHeap::max_tlab_size(), align_object_size(4 * M / HeapWordSize));
 
+
   size_t SimpleUpdateCounterStep = 1 * M;
   _step_counter_update = MIN2<size_t>(max_byte_size / 16, SimpleUpdateCounterStep);
   size_t simpleGCPrintHeapSteps = 20;
@@ -306,6 +307,7 @@ void SimpleGCHeap::collect(GCCause::Cause cause) {
     default:{
         log_info(gc)("GC request for \"%s\" is ignored", GCCause::to_string(cause));
         //TODO collect data.
+        
       }
   }
   _monitoring_support->update_counters();
