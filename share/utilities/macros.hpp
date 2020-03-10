@@ -149,6 +149,24 @@
 #define NOT_EPSILONGC_RETURN_(code) { return code; }
 #endif // INCLUDE_EPSILONGC
 
+#ifndef INCLUDE_SIMPLEGC
+#define INCLUDE_SIMPLEGC 1
+#endif // INCLUDE_SIMPLEGC
+
+#if INCLUDE_SIMPLEGC
+#define SIMPLEGC_ONLY(x) x
+#define SIMPLEGC_ONLY_ARG(arg) arg,
+#define NOT_SIMPLEGC(x)
+#define NOT_SIMPLEGC_RETURN        /* next token must be ; */
+#define NOT_SIMPLEGC_RETURN_(code) /* next token must be ; */
+#else
+#define SIMPLEGC_ONLY(x)
+#define SIMPLEGC_ONLY_ARG(arg)
+#define NOT_SIMPLEGC(x) x
+#define NOT_SIMPLEGC_RETURN        {}
+#define NOT_SIMPLEGC_RETURN_(code) { return code; }
+#endif // INCLUDE_SIMPLEGC
+
 #ifndef INCLUDE_G1GC
 #define INCLUDE_G1GC 1
 #endif // INCLUDE_G1GC

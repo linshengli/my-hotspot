@@ -173,6 +173,7 @@ class CollectedHeap : public CHeapObj<mtInternal> {
     Parallel,
     G1,
     Epsilon,
+    SimpleGC,
     Z,
     Shenandoah
   };

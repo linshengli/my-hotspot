@@ -164,6 +164,9 @@
   experimental(bool, UseEpsilonGC, false,                                   \
           "Use the Epsilon (no-op) garbage collector")                      \
                                                                             \
+  experimental(bool, UseSimpleGC, false,                                    \
+          "Use the Simple garbage collector for study.")                    \
+                                                                            \
   experimental(bool, UseZGC, false,                                         \
           "Use the Z garbage collector")                                    \
                                                                             \

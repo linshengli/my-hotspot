@@ -126,6 +126,8 @@
   template(PrintMetadata)                         \
   template(GTestExecuteAtSafepoint)               \
   template(JFROldObject)                          \
+  template(SimpleGCCollect)                       \
+
 
 class VM_Operation : public StackObj {
  public:
