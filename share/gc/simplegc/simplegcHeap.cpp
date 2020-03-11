@@ -34,6 +34,70 @@
 #include "runtime/atomic.hpp"
 #include "runtime/globals.hpp"
 #include "gc/shared/gcTraceTime.inline.hpp"
+#include "runtime/vmThread.hpp"
+#include "code/codeCache.hpp"
+#include "runtime/biasedLocking.hpp"
+#include "gc/shared/strongRootsScope.hpp"
+#include "memory/iterator.hpp"
+#include "memory/universe.hpp"
+#include "prims/jvmtiExport.hpp"
+#include "gc/shared/weakProcessor.hpp"
+#include "runtime/synchronizer.hpp"
+#include "classfile/systemDictionary.hpp"
+#include "classfile/classLoaderDataGraph.hpp"
+#include "classfile/stringTable.hpp"
+#include "logging/log.hpp"
+#include "utilities/stack.inline.hpp"
+#include "services/management.hpp"
+#include "gc/shared/preservedMarks.hpp"
+#include "gc/shared/preservedMarks.inline.hpp"
+#include "oops/oop.inline.hpp"
+#include "gc/shared/markBitMap.inline.hpp"
+#include "runtime/mutexLocker.hpp"
+
+void SimpleGCHeap::allocate_marking_bitmap(Pair<char *, size_t> heap_base_and_size_pair){
+
+};
+
+void SimpleGCHeap::do_roots(OopClosure *cl, bool everything)
+{
+
+  log_info(gc)("Begin process roots.");
+  StrongRootsScope scope(1);
+  log_info(gc)("StrongRootsScope process roots.");
+
+  //Closures
+  CLDToOopClosure clds(cl, ClassLoaderData::_claim_none);
+  log_info(gc)("CLDToOopClosure process roots.");
+  MarkingCodeBlobClosure blobs(cl, CodeBlobToOopClosure::FixRelocations);
+  log_info(gc)("MarkingCodeBlobClosure process roots.");
+  //Lock for codecache
+  {
+    MutexLocker lock(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+    // log_info(gc)("CodeCache_lock process roots.");
+
+    CodeCache::blobs_do(&blobs);
+    // log_info(gc)("CodeCache::blobs_do process roots.");
+  }
+
+  ClassLoaderDataGraph::cld_do(&clds);
+  log_info(gc)("ClassLoaderDataGraph process roots.");
+  Universe::oops_do(cl);
+  Management::oops_do(cl);
+  JvmtiExport::oops_do(cl);
+  log_info(gc)("JvmtiExport process roots.");
+  JNIHandles::oops_do(cl);
+  WeakProcessor::oops_do(cl);
+  ObjectSynchronizer::oops_do(cl);
+  SystemDictionary::oops_do(cl);
+  Threads::possibly_parallel_oops_do(false, cl, &blobs);
+
+  if (everything)
+  {
+    StringTable::shared_oops_do(cl);
+  }
+  log_info(gc)("Process roots.");
+}
 
 jint SimpleGCHeap::initialize()
 {
@@ -73,6 +137,22 @@ jint SimpleGCHeap::initialize()
 
   // Install barrier set
   BarrierSet::set_barrier_set(new SimpleGCBarrierSet());
+
+  size_t _bitmap_page_size = UseLargePages ? (size_t)os::large_page_size() : os::vm_page_size();
+  size_t _bitmap_size = MarkBitMap::compute_size(heap_rs.size());
+  _bitmap_size = align_up(_bitmap_size, _bitmap_page_size);
+
+  //TODO
+  //alocate marking bitmap
+  {
+    ReservedSpace bitmap(_bitmap_size, _bitmap_page_size);
+    // TODO MemTracker
+    _bitmap_region = MemRegion((HeapWord *)bitmap.base(), bitmap.size() / HeapWordSize);
+    MemRegion heap_region = MemRegion((HeapWord *)heap_rs.base(), heap_rs.size() / HeapWordSize);
+    _bitmap.initialize(heap_region, _bitmap_region);
+    // _bitmap_region = MemRegion();
+  }
+
   //TODO
   //alocate marking bitmap
 
@@ -208,9 +288,65 @@ HeapWord *SimpleGCHeap::allocate_work(size_t size)
   return res;
 }
 
-HeapWord *SimpleGCHeap::allocate_new_tlab(size_t min_size,
-                                          size_t requested_size,
-                                          size_t *actual_size)
+class VM_SimpleGCCollect : public VM_Operation
+{
+private:
+  GCCause::Cause _cause;
+  SimpleGCHeap *_heap;
+  static size_t _last_used;
+
+public:
+  VM_SimpleGCCollect(GCCause::Cause cause) : _cause(cause), _heap(SimpleGCHeap::heap()){};
+  const char *name() const { return "I`m the fucking gc."; };
+  virtual VMOp_Type type() const { return VMOp_SimpleGCCollect; };
+
+  virtual void doit();
+  virtual bool doit_prologue();
+  virtual void doit_epilogue();
+};
+
+void VM_SimpleGCCollect::doit()
+{
+  GCCauseSetter x(_heap, _cause);
+  _heap->do_full_collection(false);
+}
+
+bool VM_SimpleGCCollect::doit_prologue()
+{
+  log_info(gc)("doit_prologue in SimpleGC");
+  Heap_lock->lock();
+  size_t used = _heap->used();
+  size_t capacity = _heap->capacity();
+  size_t new_allocated = used > _last_used ? used - _last_used : 0;
+  //TODO
+  // we can choose more complicated ways to decide whether to gc. Maybe?
+  log_info(gc)("used: " SIZE_FORMAT " %s", byte_size_in_proper_unit(used), proper_unit_for_byte_size(used));
+  log_info(gc)("capactity: " SIZE_FORMAT " %s", byte_size_in_proper_unit(capacity), proper_unit_for_byte_size(capacity));
+  log_info(gc)("new_allocated: " SIZE_FORMAT " %s", byte_size_in_proper_unit(new_allocated), proper_unit_for_byte_size(new_allocated));
+  if (_cause != GCCause::_allocation_failure || (new_allocated > capacity / 100 && used > capacity / 2))
+  {
+    return true;
+  }
+  else
+  {
+    Heap_lock->unlock();
+    return false;
+  }
+}
+
+size_t VM_SimpleGCCollect::_last_used = 0;
+
+void VM_SimpleGCCollect::doit_epilogue()
+{
+  log_info(gc)("doit_epilogue in SimpleGC");
+  _last_used = _heap->used();
+  Heap_lock->unlock();
+}
+
+HeapWord *
+SimpleGCHeap::allocate_new_tlab(size_t min_size,
+                                size_t requested_size,
+                                size_t *actual_size)
 {
   Thread *thread = Thread::current();
 
@@ -302,28 +438,153 @@ HeapWord *SimpleGCHeap::allocate_new_tlab(size_t min_size,
   return res;
 }
 
+void SimpleGCHeap::vmentry_collect(GCCause::Cause cause)
+{
+  VM_SimpleGCCollect scOp = VM_SimpleGCCollect(cause);
+  VMThread::execute(&scOp);
+}
+
+HeapWord *SimpleGCHeap::allocate_or_collect_work(size_t size)
+{
+  HeapWord *res = allocate_work(size);
+  if (res == NULL)
+  {
+    GCCause::Cause cause = GCCause::_allocation_failure;
+    vmentry_collect(cause);
+    res = allocate_work(size);
+  }
+  return res;
+}
+
 HeapWord *SimpleGCHeap::mem_allocate(size_t size, bool *gc_overhead_limit_was_exceeded)
 {
   *gc_overhead_limit_was_exceeded = false;
-  return allocate_work(size);
+  return allocate_or_collect_work(size);
 }
+
+typedef Stack<oop, mtGC> SimpleGCMarkStack;
+
+class SimpleGCMarkClosure : public BasicOopIterateClosure
+{
+private:
+  SimpleGCMarkStack *const _stack;
+  MarkBitMap *const _bitmap;
+
+public:
+  virtual void do_oop(oop *o) { do_oop_work(o); };
+  virtual void do_oop(narrowOop *o) { do_oop_work(o); };
+  SimpleGCMarkClosure(SimpleGCMarkStack *stack, MarkBitMap *bitmap) : _stack(stack), _bitmap(bitmap) {}
+
+private:
+  template <class T>
+  void do_oop_work(T *p)
+  {
+    T o = RawAccess<>::oop_load(p);
+    if (!CompressedOops::is_null(o))
+    {
+      oop obj = CompressedOops::decode_not_null(o);
+      if (!_bitmap->is_marked(obj))
+      {
+        _bitmap->mark(obj);
+        _stack->push(obj);
+      }
+    }
+  };
+};
+
+void SimpleGCHeap::walk_bitmap(ObjectClosure *cl)
+{
+  HeapWord *limit = _space->top();
+  HeapWord *addr = _bitmap.get_next_marked_addr(_space->bottom(), limit);
+  while (addr < limit)
+  {
+    oop obj = oop(addr);
+    cl->do_object(obj);
+    addr += 1;
+    if (addr < limit)
+    {
+      addr = _bitmap.get_next_marked_addr(addr, limit);
+    }
+  }
+}
+
+class SimpleGCCalculateNewLocationClosure : public ObjectClosure
+{
+private:
+  HeapWord *_compact_point;
+  PreservedMarks *const _preserved_marks;
+
+public:
+  SimpleGCCalculateNewLocationClosure(HeapWord *compact_start, PreservedMarks *preserved_marks)
+      : _compact_point(compact_start), _preserved_marks(preserved_marks)
+  {
+  }
+  void do_object(oop obj)
+  {
+    if (cast_from_oop<HeapWord *>(obj) != _compact_point)
+    {
+      markWord mark = obj->mark_raw();
+      if (mark.must_be_preserved(obj->klass()))
+      {
+        _preserved_marks->push(obj, mark);
+      }
+      obj->forward_to(oop(_compact_point));
+    }
+    _compact_point += obj->size();
+  }
+  HeapWord *compact_point()
+  {
+    return _compact_point;
+  }
+};
 
 void SimpleGCHeap::entry_collect(GCCause::Cause cause)
 {
   log_info(gc)("SimpleGC entry collect.");
   //
-
+  size_t stat_reachable_heap = 0;
   {
     GCTraceTime(Info, gc) time("Step 0: Prologue", NULL);
+
+    if (!os::commit_memory((char *)_bitmap_region.start(), _bitmap_region.byte_size(), false))
+    {
+      log_warning(gc)("SimpleGC failed to commit native memory for marking bitmap, GC failed.");
+      return;
+    }
+    ensure_parsability(true);
+
+    //What this means?
+    //TODO
+    // CodeCache::gc_prelogue();
+    BiasedLocking::preserve_marks();
+    DerivedPointerTable::clear();
   }
 
   {
+    log_info(gc)("Step 1 mark all live objects.");
     GCTraceTime(Info, gc) time("Step 1: Mark", NULL);
     //mark all live objects with closure.
+    SimpleGCMarkStack stack;
+    SimpleGCMarkClosure cl = SimpleGCMarkClosure(&stack, &_bitmap);
+
+    process_roots(&cl);
+    stat_reachable_heap = stack.size();
+    log_info(gc)("stat_reachable_heap: stack.size() " SIZE_FORMAT "", byte_size_in_proper_unit(stat_reachable_heap));
+    while (!stack.is_empty())
+    {
+      oop obj = stack.pop();
+      obj->oop_iterate(&cl);
+      stat_reachable_heap++;
+    }
+
+    //TODO
+    //what this means?
+    DerivedPointerTable::set_active(false);
   }
 
   {
     GCTraceTime(Info, gc) time("Step 2: Calculate new locations", NULL);
+    //walk along all these oops in `_bitmap` and calculate the new locations.
   }
 
   {
@@ -350,7 +611,6 @@ void SimpleGCHeap::collect(GCCause::Cause cause)
     // Receiving these causes means the VM itself entered the safepoint for metadata collection.
     // While SimpleGC does not do GC, it has to perform sizing adjustments, otherwise we would
     // re-enter the safepoint again very soon.
-
     assert(SafepointSynchronize::is_at_safepoint(), "Expected at safepoint");
     log_info(gc)("GC request for \"%s\" is handled", GCCause::to_string(cause));
     MetaspaceGC::compute_new_size();
@@ -364,11 +624,14 @@ void SimpleGCHeap::collect(GCCause::Cause cause)
     {
       entry_collect(cause);
     }
+    else
+    {
+      vmentry_collect(cause);
+    }
   }
   }
   _monitoring_support->update_counters();
 }
-
 void SimpleGCHeap::do_full_collection(bool clear_all_soft_refs)
 {
   collect(gc_cause());

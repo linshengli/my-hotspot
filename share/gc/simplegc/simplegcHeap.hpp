@@ -31,15 +31,20 @@
 #include "gc/simplegc/simplegcMonitoringSupport.hpp"
 #include "gc/simplegc/simplegcBarrierSet.hpp"
 #include "services/memoryManager.hpp"
+#include "gc/shared/markBitMap.hpp"
+#include "utilities/pair.hpp"
+#include "gc/shared/gcTraceTime.inline.hpp"
 
-class SimpleGCHeap : public CollectedHeap {
+class SimpleGCHeap : public CollectedHeap
+{
   friend class VMStructs;
+
 private:
   SoftRefPolicy _soft_ref_policy;
-  SimpleGCMonitoringSupport* _monitoring_support;
-  MemoryPool* _pool;
+  SimpleGCMonitoringSupport *_monitoring_support;
+  MemoryPool *_pool;
   GCMemoryManager _memory_manager;
-  ContiguousSpace* _space;
+  ContiguousSpace *_space;
   VirtualSpace _virtual_space;
   size_t _max_tlab_size;
   size_t _step_counter_update;
@@ -49,22 +54,26 @@ private:
   volatile size_t _last_heap_print;
   //TODO
   //Need to add more fileds here.
+  MarkBitMap _bitmap;
+  MemRegion _bitmap_region;
 
 public:
-  static SimpleGCHeap* heap();
+  static SimpleGCHeap *heap();
 
-  SimpleGCHeap() :
-          _memory_manager("SimpleGC Heap", "") {};
+  SimpleGCHeap() : _memory_manager("SimpleGC Heap", ""){};
 
-  virtual Name kind() const {
+  virtual Name kind() const
+  {
     return CollectedHeap::SimpleGC;
   }
 
-  virtual const char* name() const {
+  virtual const char *name() const
+  {
     return "SimpleGC";
   }
 
-  virtual SoftRefPolicy* soft_ref_policy() {
+  virtual SoftRefPolicy *soft_ref_policy()
+  {
     return &_soft_ref_policy;
   }
 
@@ -72,39 +81,42 @@ public:
   virtual void post_initialize();
   virtual void initialize_serviceability();
 
-  virtual GrowableArray<GCMemoryManager*> memory_managers();
-  virtual GrowableArray<MemoryPool*> memory_pools();
+  virtual GrowableArray<GCMemoryManager *> memory_managers();
+  virtual GrowableArray<MemoryPool *> memory_pools();
 
-  virtual size_t max_capacity() const { return _virtual_space.reserved_size();  }
-  virtual size_t capacity()     const { return _virtual_space.committed_size(); }
-  virtual size_t used()         const { return _space->used(); }
+  virtual size_t max_capacity() const { return _virtual_space.reserved_size(); }
+  virtual size_t capacity() const { return _virtual_space.committed_size(); }
+  virtual size_t used() const { return _space->used(); }
 
-  virtual bool is_in(const void* p) const {
+  virtual bool is_in(const void *p) const
+  {
     return _space->is_in(p);
   }
 
-  virtual bool is_maximal_no_gc() const {
+  virtual bool is_maximal_no_gc() const
+  {
     // No GC is going to happen. Return "we are at max", when we are about to fail.
     return used() == capacity();
   }
 
   // Allocation
-  HeapWord* allocate_work(size_t size);
-  virtual HeapWord* mem_allocate(size_t size, bool* gc_overhead_limit_was_exceeded);
-  virtual HeapWord* allocate_new_tlab(size_t min_size,
+  HeapWord *allocate_work(size_t size);
+  HeapWord *allocate_or_collect_work(size_t size);
+  virtual HeapWord *mem_allocate(size_t size, bool *gc_overhead_limit_was_exceeded);
+  virtual HeapWord *allocate_new_tlab(size_t min_size,
                                       size_t requested_size,
-                                      size_t* actual_size);
+                                      size_t *actual_size);
 
   // TLAB allocation
-  virtual bool supports_tlab_allocation()           const { return true;           }
-  virtual size_t tlab_capacity(Thread* thr)         const { return capacity();     }
-  virtual size_t tlab_used(Thread* thr)             const { return used();         }
-  virtual size_t max_tlab_size()                    const { return _max_tlab_size; }
-  virtual size_t unsafe_max_tlab_alloc(Thread* thr) const;
+  virtual bool supports_tlab_allocation() const { return true; }
+  virtual size_t tlab_capacity(Thread *thr) const { return capacity(); }
+  virtual size_t tlab_used(Thread *thr) const { return used(); }
+  virtual size_t max_tlab_size() const { return _max_tlab_size; }
+  virtual size_t unsafe_max_tlab_alloc(Thread *thr) const;
 
   virtual void collect(GCCause::Cause cause);
   virtual void do_full_collection(bool clear_all_soft_refs);
-  
+
   //Added
   /*
    * collect entry.
@@ -113,47 +125,59 @@ public:
   void entry_collect(GCCause::Cause cause);
 
   // Heap walking support
-  virtual void object_iterate(ObjectClosure* cl);
+  virtual void object_iterate(ObjectClosure *cl);
 
   // Object pinning support: every object is implicitly pinned
-  virtual bool supports_object_pinning() const           { return true; }
-  virtual oop pin_object(JavaThread* thread, oop obj)    { return obj; }
-  virtual void unpin_object(JavaThread* thread, oop obj) { }
+  virtual bool supports_object_pinning() const { return true; }
+  virtual oop pin_object(JavaThread *thread, oop obj) { return obj; }
+  virtual void unpin_object(JavaThread *thread, oop obj) {}
 
   // No support for block parsing.
-  HeapWord* block_start(const void* addr) const { return NULL;  }
-  bool block_is_obj(const HeapWord* addr) const { return false; }
+  HeapWord *block_start(const void *addr) const { return NULL; }
+  bool block_is_obj(const HeapWord *addr) const { return false; }
 
   // No GC threads
-  virtual void print_gc_threads_on(outputStream* st) const {}
-  virtual void gc_threads_do(ThreadClosure* tc) const {}
+  virtual void print_gc_threads_on(outputStream *st) const {}
+  virtual void gc_threads_do(ThreadClosure *tc) const {}
 
   // No nmethod handling
-  virtual void register_nmethod(nmethod* nm) {}
-  virtual void unregister_nmethod(nmethod* nm) {}
-  virtual void flush_nmethod(nmethod* nm) {}
-  virtual void verify_nmethod(nmethod* nm) {}
+  virtual void register_nmethod(nmethod *nm) {}
+  virtual void unregister_nmethod(nmethod *nm) {}
+  virtual void flush_nmethod(nmethod *nm) {}
+  virtual void verify_nmethod(nmethod *nm) {}
 
   // No heap verification
   virtual void prepare_for_verify() {}
   virtual void verify(VerifyOption option) {}
 
-  virtual jlong millis_since_last_gc() {
+  virtual jlong millis_since_last_gc()
+  {
     // Report time since the VM start
     return os::elapsed_counter() / NANOSECS_PER_MILLISEC;
   }
 
   MemRegion reserved_region() const { return _reserved; }
-  bool is_in_reserved(const void* addr) const { return _reserved.contains(addr); }
+  bool is_in_reserved(const void *addr) const { return _reserved.contains(addr); }
 
-  virtual void print_on(outputStream* st) const;
+  virtual void print_on(outputStream *st) const;
   virtual void print_tracing_info() const;
-  virtual bool print_location(outputStream* st, void* addr) const;
+  virtual bool print_location(outputStream *st, void *addr) const;
+  void process_roots(OopClosure *cl)
+  {
+    do_roots(cl, false);
+  }
+  void process_all_roots(OopClosure *cl)
+  {
+    do_roots(cl, true);
+  }
 
 private:
+  void walk_bitmap(ObjectClosure *cl);
+  void do_roots(OopClosure *cl, bool everything);
+  void vmentry_collect(GCCause::Cause cause);
   void print_heap_info(size_t used) const;
   void print_metaspace_info() const;
-
+  void allocate_marking_bitmap(Pair<char *, size_t> heap_base_and_size_pair);
 };
 
 #endif // SHARE_GC_SIMPLEGC_SIMPLEGCHEAP_HPP
