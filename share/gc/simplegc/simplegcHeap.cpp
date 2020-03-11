@@ -61,7 +61,6 @@ void SimpleGCHeap::allocate_marking_bitmap(Pair<char *, size_t> heap_base_and_si
 
 void SimpleGCHeap::do_roots(OopClosure *cl, bool everything)
 {
-
   log_info(gc)("Begin process roots.");
   StrongRootsScope scope(1);
   log_info(gc)("StrongRootsScope process roots.");
@@ -74,14 +73,16 @@ void SimpleGCHeap::do_roots(OopClosure *cl, bool everything)
   //Lock for codecache
   {
     MutexLocker lock(CodeCache_lock, Mutex::_no_safepoint_check_flag);
-    // log_info(gc)("CodeCache_lock process roots.");
+    log_info(gc)("CodeCache_lock process roots.");
 
     CodeCache::blobs_do(&blobs);
-    // log_info(gc)("CodeCache::blobs_do process roots.");
+    log_info(gc)("CodeCache::blobs_do process roots.");
   }
-
-  ClassLoaderDataGraph::cld_do(&clds);
-  log_info(gc)("ClassLoaderDataGraph process roots.");
+  {
+    MutexLocker lock(ClassLoaderDataGraph_lock);
+    ClassLoaderDataGraph::cld_do(&clds);
+    log_info(gc)("ClassLoaderDataGraph process roots.");
+  }
   Universe::oops_do(cl);
   Management::oops_do(cl);
   JvmtiExport::oops_do(cl);
@@ -138,20 +139,23 @@ jint SimpleGCHeap::initialize()
   // Install barrier set
   BarrierSet::set_barrier_set(new SimpleGCBarrierSet());
 
-  size_t _bitmap_page_size = UseLargePages ? (size_t)os::large_page_size() : os::vm_page_size();
+  size_t _bitmap_page_size = UseLargePages ? (size_t)os::large_page_size() : (size_t)os::vm_page_size();
   size_t _bitmap_size = MarkBitMap::compute_size(heap_rs.size());
   _bitmap_size = align_up(_bitmap_size, _bitmap_page_size);
-
   //TODO
   //alocate marking bitmap
-  {
-    ReservedSpace bitmap(_bitmap_size, _bitmap_page_size);
-    // TODO MemTracker
-    _bitmap_region = MemRegion((HeapWord *)bitmap.base(), bitmap.size() / HeapWordSize);
-    MemRegion heap_region = MemRegion((HeapWord *)heap_rs.base(), heap_rs.size() / HeapWordSize);
-    _bitmap.initialize(heap_region, _bitmap_region);
-    // _bitmap_region = MemRegion();
-  }
+  ReservedSpace bitmap(_bitmap_size, _bitmap_page_size);
+  // TODO MemTracker
+  MemTracker::record_virtual_memory_type(bitmap.base(), mtGC);
+  _bitmap_region = MemRegion((HeapWord *)bitmap.base(), bitmap.size() / HeapWordSize);
+  MemRegion heap_region = MemRegion((HeapWord *)heap_rs.base(), heap_rs.size() / HeapWordSize);
+  _bitmap.initialize(heap_region, _bitmap_region);
+  // log_info(gc)("bitmap message: " SIZE_FORMAT " bitmap.size", _bitmap._bm.size());
+  // _bitmap.mark();
+  // _bitmap.
+
+  // _bitmap_region = MemRegion();
+  
 
   //TODO
   //alocate marking bitmap
@@ -464,18 +468,12 @@ HeapWord *SimpleGCHeap::mem_allocate(size_t size, bool *gc_overhead_limit_was_ex
 
 typedef Stack<oop, mtGC> SimpleGCMarkStack;
 
-class SimpleGCMarkClosure : public BasicOopIterateClosure
+class ScanOopClosure : public BasicOopIterateClosure
 {
 private:
   SimpleGCMarkStack *const _stack;
   MarkBitMap *const _bitmap;
 
-public:
-  virtual void do_oop(oop *o) { do_oop_work(o); };
-  virtual void do_oop(narrowOop *o) { do_oop_work(o); };
-  SimpleGCMarkClosure(SimpleGCMarkStack *stack, MarkBitMap *bitmap) : _stack(stack), _bitmap(bitmap) {}
-
-private:
   template <class T>
   void do_oop_work(T *p)
   {
@@ -490,6 +488,11 @@ private:
       }
     }
   };
+
+public:
+  virtual void do_oop(oop *p) { do_oop_work(p); };
+  virtual void do_oop(narrowOop *p) { do_oop_work(p); };
+  ScanOopClosure(SimpleGCMarkStack *stack, MarkBitMap *bitmap) : _stack(stack), _bitmap(bitmap) {}
 };
 
 void SimpleGCHeap::walk_bitmap(ObjectClosure *cl)
@@ -540,6 +543,8 @@ public:
 
 void SimpleGCHeap::entry_collect(GCCause::Cause cause)
 {
+  //TODO
+  GCIdMark mark;
   log_info(gc)("SimpleGC entry collect.");
   //
   size_t stat_reachable_heap = 0;
@@ -565,7 +570,8 @@ void SimpleGCHeap::entry_collect(GCCause::Cause cause)
     GCTraceTime(Info, gc) time("Step 1: Mark", NULL);
     //mark all live objects with closure.
     SimpleGCMarkStack stack;
-    SimpleGCMarkClosure cl = SimpleGCMarkClosure(&stack, &_bitmap);
+    // _bitmap->
+    ScanOopClosure cl(&stack, &_bitmap);
 
     process_roots(&cl);
     stat_reachable_heap = stack.size();
